@@ -16,9 +16,30 @@ pipeline {
             }
         }
 
+        stage('Push images to ECR') {
+            steps {
+                sh '''
+                    set -e
+
+                    REGISTRY=793790738267.dkr.ecr.ap-southeast-2.amazonaws.com
+
+                    aws ecr get-login-password --region ap-southeast-2 |
+                      docker login --username AWS --password-stdin "$REGISTRY"
+
+                    for service in catalog booking
+                    do
+                        docker tag travel-$service:v2 "$REGISTRY/travel-$service:v2"
+                        docker push "$REGISTRY/travel-$service:v2"
+                    done
+                '''
+            }
+        }
+
         stage('Deploy containers') {
             steps {
                 sh '''
+                    set -e
+
                     docker rm -f booking-v2 catalog-v2 || true
 
                     docker run -d \
@@ -38,26 +59,27 @@ pipeline {
         }
 
         stage('Check application') {
-    steps {
-        sh '''
-            for attempt in 1 2 3 4 5 6 7 8 9 10
-            do
-                echo "Checking application: attempt $attempt"
+            steps {
+                sh '''
+                    for attempt in 1 2 3 4 5 6 7 8 9 10
+                    do
+                        echo "Checking application: attempt $attempt"
 
-                if curl --fail --silent --show-error --max-time 5 \
-                    http://localhost:8004/quote \
-                    | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["destination"] == "Bengaluru"; assert data["price"] == 2500; print("Application check passed")'
-                then
-                    exit 0
-                fi
+                        if curl --fail --silent --show-error --max-time 5 \
+                            http://localhost:8004/quote \
+                            | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["destination"] == "Bengaluru"; assert data["price"] == 2500; print("Application check passed")'
+                        then
+                            exit 0
+                        fi
 
-                sleep 2
-            done
+                        sleep 2
+                    done
 
-            echo "Application check failed after 10 attempts"
-            exit 1
-        '''
+                    echo "Application check failed after 10 attempts"
+                    exit 1
+                '''
+            }
+        }
     }
 }
-    }
-}
+
