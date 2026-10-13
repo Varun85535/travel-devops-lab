@@ -48,39 +48,50 @@ pipeline {
             }
         }
 
-        stage('Deploy to DEV EKS') {
+        stage('Connect to EKS') {
             steps {
                 sh '''
-                    set -e
-
                     aws eks update-kubeconfig \
                       --region "$AWS_REGION" \
                       --name travel-eks
-
-                    bash scripts/deploy-dev.sh "$BUILD_NUMBER"
                 '''
             }
         }
 
-        stage('Check DEV application') {
+        stage('Deploy and check DEV') {
             steps {
-                sh '''
-                    for attempt in 1 2 3 4 5
-                    do
-                        echo "Checking DEV: attempt $attempt"
+                sh 'bash scripts/deploy.sh dev "$BUILD_NUMBER"'
+                sh 'bash scripts/check.sh dev'
+            }
+        }
 
-                        if kubectl exec -n dev deployment/booking -- \
-                          python -c 'import json; from urllib.request import urlopen; data=json.load(urlopen("http://localhost:8001/quote", timeout=5)); assert data["destination"] == "Bengaluru"; assert data["price"] == 2500; print("DEV application check passed")'
-                        then
-                            exit 0
-                        fi
+        stage('Approve QA') {
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: 'DEV passed. Deploy to QA?'
+                }
+            }
+        }
 
-                        sleep 2
-                    done
+        stage('Deploy and check QA') {
+            steps {
+                sh 'bash scripts/deploy.sh qa "$BUILD_NUMBER"'
+                sh 'bash scripts/check.sh qa'
+            }
+        }
 
-                    echo "DEV application check failed"
-                    exit 1
-                '''
+        stage('Approve PROD') {
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: 'QA passed. Deploy to PROD?'
+                }
+            }
+        }
+
+        stage('Deploy and check PROD') {
+            steps {
+                sh 'bash scripts/deploy.sh prod "$BUILD_NUMBER"'
+                sh 'bash scripts/check.sh prod'
             }
         }
     }
