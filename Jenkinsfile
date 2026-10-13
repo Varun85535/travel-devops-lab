@@ -1,73 +1,76 @@
 pipeline {
     agent any
 
+    options {
+        skipDefaultCheckout()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        AWS_REGION = 'ap-southeast-2'
+        REGISTRY = '793790738267.dkr.ecr.ap-southeast-2.amazonaws.com'
+    }
+
     stages {
         stage('Download code') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/Varun85535/travel-devops-lab.git'
+                checkout scm
             }
         }
 
         stage('Build Docker images') {
             steps {
-                sh 'docker build -t travel-catalog:v2 services/catalog'
-                sh 'docker build -t travel-booking:v2 services/booking'
+                sh '''
+                    set -e
+
+                    docker build \
+                      -t "$REGISTRY/travel-catalog:$BUILD_NUMBER" \
+                      services/catalog
+
+                    docker build \
+                      -t "$REGISTRY/travel-booking:$BUILD_NUMBER" \
+                      services/booking
+                '''
             }
         }
 
         stage('Push images to ECR') {
             steps {
-                sh '''
-                    set -e
+                sh '''#!/bin/bash
+                    set -euo pipefail
 
-                    REGISTRY=793790738267.dkr.ecr.ap-southeast-2.amazonaws.com
-
-                    aws ecr get-login-password --region ap-southeast-2 |
+                    aws ecr get-login-password --region "$AWS_REGION" |
                       docker login --username AWS --password-stdin "$REGISTRY"
 
-                    for service in catalog booking
-                    do
-                        docker tag travel-$service:v2 "$REGISTRY/travel-$service:v2"
-                        docker push "$REGISTRY/travel-$service:v2"
-                    done
+                    docker push "$REGISTRY/travel-catalog:$BUILD_NUMBER"
+                    docker push "$REGISTRY/travel-booking:$BUILD_NUMBER"
                 '''
             }
         }
 
-        stage('Deploy containers') {
+        stage('Deploy to DEV EKS') {
             steps {
                 sh '''
                     set -e
 
-                    docker rm -f booking-v2 catalog-v2 || true
+                    aws eks update-kubeconfig \
+                      --region "$AWS_REGION" \
+                      --name travel-eks
 
-                    docker run -d \
-                      --name catalog-v2 \
-                      --network travel-network \
-                      -p 8005:8000 \
-                      travel-catalog:v2
-
-                    docker run -d \
-                      --name booking-v2 \
-                      --network travel-network \
-                      -p 8004:8001 \
-                      -e CATALOG_URL=http://catalog-v2:8000 \
-                      travel-booking:v2
+                    bash scripts/deploy-dev.sh "$BUILD_NUMBER"
                 '''
             }
         }
 
-        stage('Check application') {
+        stage('Check DEV application') {
             steps {
                 sh '''
-                    for attempt in 1 2 3 4 5 6 7 8 9 10
+                    for attempt in 1 2 3 4 5
                     do
-                        echo "Checking application: attempt $attempt"
+                        echo "Checking DEV: attempt $attempt"
 
-                        if curl --fail --silent --show-error --max-time 5 \
-                            http://localhost:8004/quote \
-                            | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["destination"] == "Bengaluru"; assert data["price"] == 2500; print("Application check passed")'
+                        if kubectl exec -n dev deployment/booking -- \
+                          python -c 'import json; from urllib.request import urlopen; data=json.load(urlopen("http://localhost:8001/quote", timeout=5)); assert data["destination"] == "Bengaluru"; assert data["price"] == 2500; print("DEV application check passed")'
                         then
                             exit 0
                         fi
@@ -75,11 +78,10 @@ pipeline {
                         sleep 2
                     done
 
-                    echo "Application check failed after 10 attempts"
+                    echo "DEV application check failed"
                     exit 1
                 '''
             }
         }
     }
 }
-
