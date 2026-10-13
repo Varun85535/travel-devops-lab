@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 destinations = [
     {"id": 1, "name": "Bengaluru", "price": 2500},
     {"id": 2, "name": "Mysuru", "price": 1800},
-    {"id": 3, "name": "Goa", "price": 4500}
+    {"id": 3, "name": "Goa", "price": 5000}
 ]
 
 
